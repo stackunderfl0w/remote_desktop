@@ -97,26 +97,17 @@ void clientAddressStruct(struct sockaddr_in* address, int portNumber, char* host
 }
 
 
-//make sure input buf is 1 longer than expected message.
-static inline int get_message(int listenSocket,char* buf,int expected_length){
+static inline ssize_t get_message(int listenSocket,char* buf,int expected_length){
     ssize_t charsRead=0;
-    while (charsRead<expected_length){ // As long as we haven't found the terminal...
-        size_t r = recv(listenSocket, buf+charsRead, expected_length-charsRead, 0); // Get the next chunk
-        if (r == -1) {//socket open, no data recieved
-            if (charsRead < 0){
-                err(2,"ERROR reading from socket\n");
-            }
-            r=0;
-        }
-        else if(r==0){//socket closed
+    while (charsRead<expected_length){
+        ssize_t r = recv(listenSocket, buf+charsRead, expected_length-charsRead, 0); // Get the next chunk
+        if (r <= 0) {//socket open, no data recieved
             printf("Server: connection timeout or closed by peer\n");
             return -1;
         }
         charsRead+=r;
-
     }
-    //printf("%ld\n",charsRead);
-    return 0;
+    return charsRead;
 }
 static inline char* get_message_with_header(int listenSocket, int* len){
     //get 8 byte length header
@@ -134,13 +125,19 @@ static inline char* get_message_with_header(int listenSocket, int* len){
     }
     return ret_buf;
 }
-void send_message(int socketFD, char* buffer, int len){
+ssize_t send_message(int socketFD, char* buffer, int len){
     ssize_t charsWritten = 0;
-    while(charsWritten<len){
-        charsWritten+=send(socketFD, buffer+charsWritten, len-charsWritten, 0);
+    while (charsWritten<len){
+        ssize_t r = send(socketFD, buffer+charsWritten, len-charsWritten, 0); // Send the next chunk
+        if (r <= 0) {
+            printf("Server: connection timeout or closed by peer\n");
+            return -1;
+        }
+        charsWritten+=r;
     }
+    return charsWritten;
 }
-void send_message_with_header(int socketFD, char* buffer, int len){
+ssize_t send_message_with_header(int socketFD, char* buffer, size_t len){
     char tmp[9];
     sprintf(tmp,"%-8d",len);
     //send header
@@ -155,7 +152,8 @@ void send_message_with_header(int socketFD, char* buffer, int len){
     iov[1].iov_base = buffer;
     iov[1].iov_len = len;
 
-    int bytes_written = writev (socketFD, iov, 2);
+    ssize_t bytes_written = writev (socketFD, iov, 2);
+    return bytes_written;
 }
 
 void cork_socket(int socketfd){
@@ -166,13 +164,12 @@ void uncork_socket(int socketfd){
     int state = 0;
     setsockopt(socketfd, IPPROTO_TCP, TCP_CORK, &state, sizeof(state));
 }
-void enable_tcp_nodelay(int socketfd){
+int enable_tcp_nodelay(int socketfd){
     int state = 1;
-    int result = setsockopt(socketfd,
+    return setsockopt(socketfd,
                             IPPROTO_TCP,
                             TCP_NODELAY,
                             (char *) &state,
                             sizeof(int));    // 1 - on, 0 - off
-
 }
 

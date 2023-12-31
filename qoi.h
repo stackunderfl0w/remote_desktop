@@ -126,7 +126,7 @@ void* qoi_decode(uint8_t* data, int* width, int* height, int* channels){
         else {
             uint8_t chunk = *d++;
             if (chunk == QOI_OP_RGB) {
-                px = (pixel) {d[0], d[1], d[2], px.a};
+                px = (pixel) {{{d[0], d[1], d[2], px.a}}};
                 d += 3;
             } else if (chunk == QOI_OP_RGBA) {
                 px = *(pixel *) d;
