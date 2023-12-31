@@ -133,14 +133,14 @@ int main(int argc, char* argv[]) {
         if (setsockopt (connectionSocket, SOL_SOCKET, SO_RCVTIMEO, &tv,sizeof tv) < 0) perror("setsockopt failed\n");
         //enable_tcp_nodelay(connectionSocket);
 
-//        pid_t pid = fork();
-//        if (pid == -1)
-//            err(1, "Hull Breach");
-//        if(pid>0){//parent
-//            close(connectionSocket);
-//            waitpid(pid,NULL,0);
-//            continue;
-//        }
+        pid_t pid = fork();
+        if (pid == -1)
+            err(1, "Hull Breach");
+        if(pid>0){//parent
+            close(connectionSocket);
+            waitpid(pid,NULL,0);
+            continue;
+        }
         uint8_t* prev_img= malloc(wa.width*wa.height*4);
         uint8_t* enc= malloc(wa.width*wa.height*4);
 
