@@ -10,7 +10,7 @@
 #include "net-wrapper.h"
 #include "qoi.h"
 
-int handle_input_event(Display* disp, int connectionSocket){
+int handle_input_event(Display *disp, int connectionSocket, ssize_t *ack_count) {
     int len;
     int count;
     ioctl(connectionSocket, FIONREAD, &count);
@@ -20,6 +20,9 @@ int handle_input_event(Display* disp, int connectionSocket){
             return 1;
         //check if socket has messages
         switch (m[0]) {
+            case 'A'://frame ack
+                (*ack_count)++;
+                break;
             case 'M':{//mouse
                 //printf("mouse-event\n");
                 int x,y,mb=0,click=0;
@@ -53,8 +56,8 @@ int handle_input_event(Display* disp, int connectionSocket){
                 break;
             }
             case 'K':{
-                printf("key-event\n");
-                printf("(%s)\n",m);
+                //printf("key-event\n");
+                //printf("(%s)\n",m);
                 int kc=0,press;
                 press=m[1]=='D'?True:False;
                 sscanf(m+3,"%d",&kc);
@@ -65,7 +68,6 @@ int handle_input_event(Display* disp, int connectionSocket){
         free(m);
         ioctl(connectionSocket, FIONREAD, &count);
     }
-    XFlush(disp);
     return 0;
 }
 
@@ -77,32 +79,6 @@ int main(int argc, char* argv[]) {
         if(!portNumber){
             err(EXIT_FAILURE,"Invalid port number \'%s\'",argv[1]);
         }
-    }
-
-
-    Display* disp = XOpenDisplay(NULL);
-    if(!disp)
-        err(1,"Error: Cannot open default x11 display\n");
-
-    Window root = DefaultRootWindow(disp);
-    if(!root)
-        err(1,"Error: Cannot open default x11 root window\n");
-
-    int xshm_available=XShmQueryExtension(disp);
-    if(!xshm_available)
-        printf( "Server: X11 SHM extension support not found, falling back\n" );
-
-    XWindowAttributes wa;
-    XGetWindowAttributes(disp, root, &wa);
-
-    XImage *image=NULL;
-    XShmSegmentInfo shminfo;
-    if(xshm_available){
-        image = XShmCreateImage(disp, wa.visual, wa.depth, ZPixmap, NULL, &shminfo, wa.width, wa.height);
-        shminfo.shmid = shmget(IPC_PRIVATE, image->bytes_per_line * image->height, IPC_CREAT | 0777);
-        shminfo.shmaddr = image->data = shmat(shminfo.shmid, 0, 0);
-        shminfo.readOnly = False;//needed?
-        XShmAttach(disp, &shminfo);
     }
 
     int listenSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -141,16 +117,53 @@ int main(int argc, char* argv[]) {
             waitpid(pid,NULL,0);
             continue;
         }
+        //Initialize X11/Xlib after forking to prevent the child being able to mess up the parent's copy
+        //Mainly an issue over the network
+        Display* disp = XOpenDisplay(NULL);
+        if(!disp)
+            err(1,"Error: Cannot open default x11 display\n");
+
+        Window root = DefaultRootWindow(disp);
+        if(!root)
+            err(1,"Error: Cannot open default x11 root window\n");
+
+        int xshm_available=XShmQueryExtension(disp);
+        if(!xshm_available)
+            printf( "Server: X11 SHM extension support not found, falling back\n" );
+
+        XWindowAttributes wa;
+        XGetWindowAttributes(disp, root, &wa);
+
+        XImage *image=NULL;
+        XShmSegmentInfo shminfo;
+        if(xshm_available){
+            image = XShmCreateImage(disp, wa.visual, wa.depth, ZPixmap, NULL, &shminfo, wa.width, wa.height);
+            shminfo.shmid = shmget(IPC_PRIVATE, image->bytes_per_line * image->height, IPC_CREAT | 0777);
+            shminfo.shmaddr = image->data = shmat(shminfo.shmid, 0, 0);
+            shminfo.readOnly = False;//needed?
+            XShmAttach(disp, &shminfo);
+        }
+
         uint8_t* prev_img= malloc(wa.width*wa.height*4);
         uint8_t* enc= malloc(wa.width*wa.height*4);
 
         for (int i = 0; i < wa.width*wa.height; ++i) {
             ((uint32_t*)prev_img)[i]=0xff000000;
         }
+        ssize_t max_frame_presend=5;
         while(1) {
-            if(handle_input_event(disp,connectionSocket)){
+            if(handle_input_event(disp, connectionSocket, &max_frame_presend)){
                 break;
             }
+            XFlush(disp);
+
+            //wait until we get confirmation the client recieved frames
+            while(max_frame_presend==0){
+                if(handle_input_event(disp, connectionSocket, &max_frame_presend)){
+                    break;
+                }
+            }
+
             if(xshm_available)
                 XShmGetImage(disp, RootWindow(disp,0), image, 0, 0, AllPlanes);
             else
@@ -169,13 +182,14 @@ int main(int argc, char* argv[]) {
                 XDestroyImage(image);
             }
             XFlush(disp);
+            max_frame_presend--;
         }
         close(connectionSocket);
         free(prev_img);
         printf("Server: Connection to client closed\n\n");
+        XDestroyImage(image);
     }
 
     close(listenSocket);
-    XDestroyImage(image);
     return 0;
 }
