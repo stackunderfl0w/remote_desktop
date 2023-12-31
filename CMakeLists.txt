@@ -3,7 +3,8 @@ project(remote_desktop C)
 
 set(CMAKE_C_STANDARD 99)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -Wall")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -mtune=native -Wall")
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -mtune=native -Wall -ftree-vectorize -fdump-tree-vect-details")
 
 
 

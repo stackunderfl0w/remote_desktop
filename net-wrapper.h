@@ -14,50 +14,6 @@
 
 #include <netinet/tcp.h>
 
-void
-poll_wait(int fd, int events)
-{
-    int n;
-    struct pollfd pollfds[1];
-    memset((char *) &pollfds, 0, sizeof(pollfds));
-
-    pollfds[0].fd = fd;
-    pollfds[0].events = events;
-
-    n = poll(pollfds, 1, -1);
-    if (n < 0) {
-        perror("poll()");
-        errx(1, "Poll failed");
-    }
-}
-
-
-size_t
-writenw(int fd, char *buf, size_t n){
-    size_t pos = 0;
-    ssize_t res;
-    while (n > pos) {
-        poll_wait(fd, POLLOUT | POLLERR);
-        res = write (fd, buf + pos, n - pos);
-        switch ((int)res) {
-            case -1:
-                if (errno == EINTR || errno == EAGAIN)
-                    continue;
-                return 0;
-            case 0:
-                errno = EPIPE;
-                return pos;
-            default:
-                pos += (size_t)res;
-        }
-    }
-    return (pos);
-
-}
-
-#define ACCEPT "ACC"
-#define DECLINE "DEC"
-
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
@@ -141,9 +97,11 @@ ssize_t send_message_with_header(int socketFD, char* buffer, size_t len){
     char tmp[9];
     sprintf(tmp,"%-8d",len);
     //send header
-    //send_message(socketFD, tmp, 8);
-    //send message
-    //send_message(socketFD, buffer, len);
+//    if(send_message(socketFD, tmp, 8)==-1){
+//        return -1;
+//    }
+//    //send message
+//    ssize_t bytes_written = send_message(socketFD, buffer, len);
 
     //scatter gather i/o
     struct iovec iov[2];

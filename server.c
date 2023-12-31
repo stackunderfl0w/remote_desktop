@@ -10,50 +10,63 @@
 #include "net-wrapper.h"
 #include "qoi.h"
 
-void handle_input_event(Display* disp, char* m){
-    switch (m[0]) {
-        case 'M':{//mouse
-            printf("mouse-event\n");
-            int x,y,mb=0,click=0;
-            int dir=0;
-            int scroll=0;
-            switch (m[1]){
-                case 'C'://Click
-                    click=m[2]=='D'?True:False;
-                    sscanf(m+4,"%d %d %d",&mb,&x,&y);
-                    break;
-                case 'S'://Scroll
-                    scroll=1;
-                    dir=m[2]=='D';
-                case 'V'://Mouse moved/dragged
-                    sscanf(m+4,"%d%d",&x,&y);
-                    break;
+int handle_input_event(Display* disp, int connectionSocket){
+    int len;
+    int count;
+    ioctl(connectionSocket, FIONREAD, &count);
+    while(count){
+        char *m = get_message_with_header(connectionSocket, &len);
+        if(m==NULL)
+            return 1;
+        //check if socket has messages
+        switch (m[0]) {
+            case 'M':{//mouse
+                //printf("mouse-event\n");
+                int x,y,mb=0,click=0;
+                int dir=0;
+                int scroll=0;
+                switch (m[1]){
+                    case 'C'://Click
+                        click=m[2]=='D'?True:False;
+                        sscanf(m+4,"%d %d %d",&mb,&x,&y);
+                        break;
+                    case 'S'://Scroll
+                        scroll=1;
+                        dir=m[2]=='D';
+                    case 'V'://Mouse moved/dragged
+                        sscanf(m+4,"%d%d",&x,&y);
+                        break;
 
+                }
+                //printf("%d %d %d\n",mb,x,y);
+                //move mouse
+                XTestFakeMotionEvent(disp,0,x,y,CurrentTime);
+                //click
+                if(mb)
+                    XTestFakeButtonEvent(disp, mb, click, CurrentTime);
+                //scroll
+                if(scroll){
+                    //button 4 up, button 5 down
+                    XTestFakeButtonEvent(disp, Button4+dir, True, CurrentTime);
+                    XTestFakeButtonEvent(disp, Button4+dir, False, CurrentTime);
+                }
+                break;
             }
-            printf("%d %d %d\n",mb,x,y);
-            //move mouse
-            XTestFakeMotionEvent(disp,0,x,y,CurrentTime);
-            //click
-            if(mb)
-                XTestFakeButtonEvent(disp, mb, click, CurrentTime);
-            //scroll
-            if(scroll){
-                //button 4 up, button 5 down
-                XTestFakeButtonEvent(disp, Button4+dir, True, CurrentTime);
-                XTestFakeButtonEvent(disp, Button4+dir, False, CurrentTime);
+            case 'K':{
+                printf("key-event\n");
+                printf("(%s)\n",m);
+                int kc=0,press;
+                press=m[1]=='D'?True:False;
+                sscanf(m+3,"%d",&kc);
+                XTestFakeKeyEvent(disp,XKeysymToKeycode(disp,kc),press,CurrentTime);
+                break;
             }
-            break;
         }
-        case 'K':{
-            printf("key-event\n");
-            printf("(%s)\n",m);
-            int kc=0,press;
-            press=m[1]=='D'?True:False;
-            sscanf(m+3,"%d",&kc);
-            XTestFakeKeyEvent(disp,XKeysymToKeycode(disp,kc),press,CurrentTime);
-            break;
-        }
+        free(m);
+        ioctl(connectionSocket, FIONREAD, &count);
     }
+    XFlush(disp);
+    return 0;
 }
 
 
@@ -65,6 +78,7 @@ int main(int argc, char* argv[]) {
             err(EXIT_FAILURE,"Invalid port number \'%s\'",argv[1]);
         }
     }
+
 
     Display* disp = XOpenDisplay(NULL);
     if(!disp)
@@ -117,51 +131,40 @@ int main(int argc, char* argv[]) {
         printf("Server: Waiting for connection\n");
         connectionSocket = accept(listenSocket,(struct sockaddr *)&clientAddress,&sizeOfClientInfo);
         if (setsockopt (connectionSocket, SOL_SOCKET, SO_RCVTIMEO, &tv,sizeof tv) < 0) perror("setsockopt failed\n");
-        pid_t pid = fork();
-        if (pid == -1)
-            err(1, "Hull Breach");
-        if(pid>0){//parent
-            close(connectionSocket);
-            waitpid(pid,NULL,0);
-            continue;
-        }
+        //enable_tcp_nodelay(connectionSocket);
+
+//        pid_t pid = fork();
+//        if (pid == -1)
+//            err(1, "Hull Breach");
+//        if(pid>0){//parent
+//            close(connectionSocket);
+//            waitpid(pid,NULL,0);
+//            continue;
+//        }
         uint8_t* prev_img= malloc(wa.width*wa.height*4);
-        uint8_t* current_image= malloc(wa.width*wa.height*4);
+        uint8_t* enc= malloc(wa.width*wa.height*4);
+
         for (int i = 0; i < wa.width*wa.height; ++i) {
             ((uint32_t*)prev_img)[i]=0xff000000;
         }
         while(1) {
-            int len;
-            char *message = get_message_with_header(connectionSocket, &len);
-            if (!message) {break;}//client disconnected
-            free(message);
-
-            int count;
-            ioctl(connectionSocket, FIONREAD, &count);
-            while(count){
-                char *m = get_message_with_header(connectionSocket, &len);
-                //check if socket has messages
-                handle_input_event(disp,m);
-                free(m);
-                ioctl(connectionSocket, FIONREAD, &count);
+            if(handle_input_event(disp,connectionSocket)){
+                break;
             }
-            XFlush(disp);
             if(xshm_available)
                 XShmGetImage(disp, RootWindow(disp,0), image, 0, 0, AllPlanes);
             else
                 image = XGetImage(disp, root, 0, 0, wa.width, wa.height, AllPlanes, ZPixmap);
             if(!image)
                 err(1,"Invalid X11 image");
-            //calculate frame delta
-            for (int i = 0; i < wa.width*wa.height*4; ++i)
-                current_image[i]= image->data[i] - prev_img[i];
 
-            memcpy(prev_img, image->data, wa.height * wa.width * 4);
             int size;
-            uint8_t *enc = qoi_encode(current_image, wa.width, wa.height, image->bits_per_pixel / 8, &size);
+            qoi_encode_diff(enc, image->data, prev_img, wa.width, wa.height, image->bits_per_pixel / 8, &size);
+            memcpy(prev_img, image->data, wa.height * wa.width * 4);
 
-            send_message_with_header(connectionSocket, (char *) enc, size);
-            free(enc);
+            if(send_message_with_header(connectionSocket, (char *) enc, size)==-1){
+                break;
+            }
             if(!xshm_available){
                 XDestroyImage(image);
             }
@@ -169,7 +172,6 @@ int main(int argc, char* argv[]) {
         }
         close(connectionSocket);
         free(prev_img);
-        free(current_image);
         printf("Server: Connection to client closed\n\n");
     }
 

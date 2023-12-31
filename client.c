@@ -55,7 +55,6 @@ int main(int argc, char *argv[]) {
     send_message_with_header(socketFD, ms, strlen(ms));
     int window_w=1280,window_h=720;
     int host_w=1920,host_h=1080,host_c=4;
-    int mousedown=0b00;
     uint8_t* current_image=calloc(host_w*host_h*host_c,1);
 
     while(running){
@@ -70,6 +69,9 @@ int main(int argc, char *argv[]) {
         //bundle packets
         cork_socket(socketFD);
         send_message_with_header(socketFD, ms, strlen(ms));
+
+
+
 
         while(SDL_PollEvent(&event)){
             char message[256]={0};
@@ -102,7 +104,7 @@ int main(int argc, char *argv[]) {
                     int w = event.wheel.mouseX * host_w / window_w;
                     int h = event.wheel.mouseY * host_h / window_h;
                     sprintf(message, "MS%C %d %d", event.wheel.preciseY < 0 ? 'U' : 'D', w,h);
-                    printf("MS:%s\n", message);
+                    //printf("MS:%s\n", message);
                     send_message_with_header(socketFD, message, strlen(message));
                     break;
                 }
@@ -155,6 +157,7 @@ int main(int argc, char *argv[]) {
         uncork_socket(socketFD);
         int len;
         uint8_t *received = (uint8_t*)get_message_with_header(socketFD, &len);
+        send_message_with_header(socketFD,"ACK",3);
         if(!received){
             err(1,"Connection failed");
         }
