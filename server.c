@@ -6,18 +6,29 @@
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <sys/shm.h>
+#include <pthread.h>
 
 #include "net-wrapper.h"
 #include "qoi.h"
 
+typedef struct{
+    Display* disp;
+    int connectionSocket;
+    ssize_t* ack_count;
+    int* running;
+} server_input_thread_args;
+
 int handle_input_event(Display *disp, int connectionSocket, ssize_t *ack_count) {
     int len;
-    int count;
-    ioctl(connectionSocket, FIONREAD, &count);
+    int inputs_received=0;
+    int count= socket_status(connectionSocket);
     while(count){
+        if(count==-1)
+            return -1;
+        inputs_received++;
         char *m = get_message_with_header(connectionSocket, &len);
         if(m==NULL)
-            return 1;
+            return -1;
         //check if socket has messages
         switch (m[0]) {
             case 'A'://frame ack
@@ -43,7 +54,7 @@ int handle_input_event(Display *disp, int connectionSocket, ssize_t *ack_count) 
                 }
                 //printf("%d %d %d\n",mb,x,y);
                 //move mouse
-                XTestFakeMotionEvent(disp,0,x,y,CurrentTime);
+                //XTestFakeMotionEvent(disp,0,x,y,CurrentTime);
                 //click
                 if(mb)
                     XTestFakeButtonEvent(disp, mb, click, CurrentTime);
@@ -66,9 +77,24 @@ int handle_input_event(Display *disp, int connectionSocket, ssize_t *ack_count) 
             }
         }
         free(m);
-        ioctl(connectionSocket, FIONREAD, &count);
+        count= socket_status(connectionSocket);
     }
-    return 0;
+    return inputs_received;
+}
+
+void* input_thread_main(server_input_thread_args* args){
+    while(*(args->running)){
+        int res=handle_input_event(args->disp,args->connectionSocket,args->ack_count);
+        if(res<0){
+            *(args->running)=0;
+            break;
+        }
+        else if(res>0){
+            XFlush(args->disp);
+        }
+        usleep(1);
+    }
+    return NULL;
 }
 
 
@@ -109,16 +135,17 @@ int main(int argc, char* argv[]) {
         if (setsockopt (connectionSocket, SOL_SOCKET, SO_RCVTIMEO, &tv,sizeof tv) < 0) perror("setsockopt failed\n");
         //enable_tcp_nodelay(connectionSocket);
 
-        pid_t pid = fork();
-        if (pid == -1)
-            err(1, "Hull Breach");
-        if(pid>0){//parent
-            close(connectionSocket);
-            waitpid(pid,NULL,0);
-            continue;
-        }
+//        pid_t pid = fork();
+//        if (pid == -1)
+//            err(1, "Hull Breach");
+//        if(pid>0){//parent
+//            close(connectionSocket);
+//            waitpid(pid,NULL,0);
+//            continue;
+//        }
         //Initialize X11/Xlib after forking to prevent the child being able to mess up the parent's copy
         //Mainly an issue over the network
+        XInitThreads();
         Display* disp = XOpenDisplay(NULL);
         if(!disp)
             err(1,"Error: Cannot open default x11 display\n");
@@ -151,39 +178,42 @@ int main(int argc, char* argv[]) {
             ((uint32_t*)prev_img)[i]=0xff000000;
         }
         ssize_t max_frame_presend=5;
-        while(1) {
-            if(handle_input_event(disp, connectionSocket, &max_frame_presend)){
-                break;
-            }
-            XFlush(disp);
+        int running=1;
+        server_input_thread_args inputThreadArgs={disp, connectionSocket, &max_frame_presend, &running};
+        pthread_t input_thread;
+        pthread_create(&input_thread, NULL, (void *(*)(void *)) input_thread_main, &inputThreadArgs);
 
-            //wait until we get confirmation the client recieved frames
-            while(max_frame_presend==0){
-                if(handle_input_event(disp, connectionSocket, &max_frame_presend)){
-                    break;
-                }
+        while(running) {
+
+            //wait until we get confirmation the client received frames
+            while(running && max_frame_presend==0){
+                usleep(1000);
             }
 
+            //XLockDisplay(disp);
             if(xshm_available)
                 XShmGetImage(disp, RootWindow(disp,0), image, 0, 0, AllPlanes);
             else
                 image = XGetImage(disp, root, 0, 0, wa.width, wa.height, AllPlanes, ZPixmap);
             if(!image)
                 err(1,"Invalid X11 image");
+            //XUnlockDisplay(disp);
 
             int size;
             qoi_encode_diff(enc, image->data, prev_img, wa.width, wa.height, image->bits_per_pixel / 8, &size);
             memcpy(prev_img, image->data, wa.height * wa.width * 4);
 
-            if(send_message_with_header(connectionSocket, (char *) enc, size)==-1){
+            if(!running)
                 break;
-            }
-            if(!xshm_available){
+            if(send_message_with_header(connectionSocket, (char *) enc, size)==-1)
+                break;
+            if(!xshm_available)
                 XDestroyImage(image);
-            }
+
             XFlush(disp);
             max_frame_presend--;
         }
+        running = 0;
         close(connectionSocket);
         free(prev_img);
         printf("Server: Connection to client closed\n\n");

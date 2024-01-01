@@ -8,7 +8,148 @@
 #include "net-wrapper.h"
 #include "qoi.h"
 #include <time.h>
+#include <pthread.h>
 
+typedef struct {
+    int socketFD;
+    int* running;
+    int* window_w, *window_h;
+    int* host_w,*host_h,*host_c;
+}client_input_thread_args;
+
+void* client_input_thread(void* arg){
+    client_input_thread_args* args=arg;
+    int socketFD = args->socketFD;
+    char *ms = "Client connected\n";
+    send_message_with_header(socketFD, ms, strlen(ms));
+
+    SDL_Event event;
+    //bundle packets
+    cork_socket(socketFD);
+    send_message_with_header(socketFD, ms, strlen(ms));
+    while(*(args->running)) {
+        while (SDL_PollEvent(&event)) {
+            char message[256] = {0};
+            switch (event.type) {
+                case SDL_QUIT:
+                    *(args->running) = 0;
+                    break;
+                case SDL_WINDOWEVENT:
+                    if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                        *(args->window_w) = event.window.data1;
+                        *(args->window_h) = event.window.data2;
+                        printf("%d %d\n", *args->window_w, *args->window_h);
+                    }
+                    break;
+                case SDL_MOUSEBUTTONDOWN:
+                case SDL_MOUSEBUTTONUP: {
+                    int w = event.button.x * (*args->host_w) / (*args->window_w);
+                    int h = event.button.y * (*args->host_h) / (*args->window_h);
+                    int mb_down = event.type == SDL_MOUSEBUTTONDOWN;
+                    sprintf(message, "MC%c %d %d %d", mb_down ? 'D' : 'U', event.button.button, w, h);
+                    send_message_with_header(socketFD, message, strlen(message));
+                    break;
+                }
+                case SDL_MOUSEMOTION: {
+                    int w = event.button.x * (*args->host_w) / (*args->window_w);
+                    int h = event.button.y * (*args->host_h) / (*args->window_h);
+                    sprintf(message, "MV- %d %d", w, h);
+                    send_message_with_header(socketFD, message, strlen(message));
+                }
+                    break;
+                case SDL_MOUSEWHEEL: {
+                    int w = event.wheel.mouseX * (*args->host_w) / (*args->window_w);
+                    int h = event.wheel.mouseY * (*args->host_h) / (*args->window_h);
+                    sprintf(message, "MS%C %d %d", event.wheel.preciseY < 0 ? 'U' : 'D', w, h);
+                    //printf("MS:%s\n", message);
+                    send_message_with_header(socketFD, message, strlen(message));
+                    break;
+                }
+//                case SDL_FINGERMOTION:
+//                    printf("%f %f\n",event.tfinger.dx,event.tfinger.dx);
+//                    break;
+                case SDL_KEYDOWN:
+                case SDL_KEYUP: {
+                    //so text keys genetate an instant keyup but modifiers like shift wait until you actually release the key
+                    //printf("keyp\n");
+                    int kc = event.key.keysym.sym;
+                    int press = event.type == SDL_KEYDOWN;
+                    //ascii control codes are prefixed with 0xff00 X11
+                    switch (kc) {
+                        //printable ascii characters are mapped normally ( note: glibc isprint crashes on special keys)
+                        case ' '...'~':
+                            break;
+                        case SDLK_BACKSPACE:
+                        case SDLK_TAB:
+                        case SDLK_RETURN:
+                        case SDLK_ESCAPE:
+                            kc |= 0xff00;
+                            break;
+                        case SDLK_LCTRL:
+                            kc = XK_Control_L;
+                            break;
+                        case SDLK_RCTRL:
+                            kc = XK_Control_R;
+                            break;
+                        case SDLK_LSHIFT:
+                            kc = XK_Shift_L;
+                            break;
+                        case SDLK_RSHIFT:
+                            kc = XK_Shift_R;
+                            break;
+                        case SDLK_LALT:
+                            kc = XK_Alt_L;
+                            break;
+                        case SDLK_RALT:
+                            kc = XK_Alt_R;
+                            break;
+                        case SDLK_LGUI:
+                            kc = XK_Meta_L;
+                            break;
+                        case SDLK_RGUI:
+                            kc = XK_Meta_R;
+                            break;
+
+                        case SDLK_RIGHT:
+                            kc = XK_Right;
+                            break;
+                        case SDLK_LEFT:
+                            kc = XK_Left;
+                            break;
+                        case SDLK_DOWN:
+                            kc = XK_Down;
+                            break;
+                        case SDLK_UP:
+                            kc = XK_Up;
+                            break;
+                        case SDLK_DELETE:
+                            kc = XK_Delete;
+                            break;
+
+
+                        case SDLK_F1...SDLK_F12:
+                            kc = kc - SDLK_F1 + XK_F1;
+                            break;
+
+                            //case SDLK_CAPSLOCK:kc=XK_Caps_Lock;break;
+
+                        default:
+                            printf("Unmapped key %d\n", kc);
+                            continue;
+                    }
+                    printf("%d\n", kc);
+                    sprintf(message, "K%c %8d", press ? 'D' : 'U', kc);
+                    send_message_with_header(socketFD, message, strlen(message));
+                    break;
+                    default:
+                        printf("type: %d\n", event.type);
+                }
+            }
+        }
+        uncork_socket(socketFD);
+        usleep(1000);
+    }
+}
 
 int main(int argc, char *argv[]) {
     int portNumber=6001;
@@ -51,10 +192,15 @@ int main(int argc, char *argv[]) {
     struct timespec timestamps[60];
     int time_idx=0;
     int running=1;
-    char *ms = "Client connected\n";
-    send_message_with_header(socketFD, ms, strlen(ms));
     int window_w=1280,window_h=720;
     int host_w=1920,host_h=1080,host_c=4;
+
+    client_input_thread_args args=
+            {socketFD,&running,&window_w,&window_h,&host_w,&host_h,&host_c};
+    //create input thread
+    pthread_t input_thread;
+    pthread_create(&input_thread,NULL,client_input_thread,&args);
+
     uint8_t* current_image=calloc(host_w*host_h*host_c,1);
 
     while(running){
@@ -65,96 +211,8 @@ int main(int argc, char *argv[]) {
         if(!time_idx)
             printf("fps:%f\n",fps);
         time_idx=(time_idx+1)%60;
-        SDL_Event event;
-        //bundle packets
-        cork_socket(socketFD);
-        send_message_with_header(socketFD, ms, strlen(ms));
-
-
-
-
-        while(SDL_PollEvent(&event)){
-            char message[256]={0};
-            switch(event.type){
-                case SDL_QUIT:
-                    running = 0; break;
-                case SDL_WINDOWEVENT:
-                    if (event.window.event == SDL_WINDOWEVENT_RESIZED){
-                        window_w = event.window.data1;
-                        window_h = event.window.data2;
-                        printf("%d %d\n",window_w,window_h);
-                    }
-                    break;
-                case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP:{
-                    int w=event.button.x*host_w/window_w;
-                    int h=event.button.y*host_h/window_h;
-                    int mb_down=event.type==SDL_MOUSEBUTTONDOWN;
-                    sprintf(message,"MC%c %d %d %d",mb_down?'D':'U',event.button.button,w,h);
-                    send_message_with_header(socketFD,message,strlen(message));
-                    break;
-                }
-                case SDL_MOUSEMOTION:{
-                        int w=event.button.x*host_w/window_w;
-                        int h=event.button.y*host_h/window_h;
-                        sprintf(message,"MV- %d %d",w,h);
-                        send_message_with_header(socketFD,message,strlen(message));
-                    }
-                    break;
-                case SDL_MOUSEWHEEL: {
-                    int w = event.wheel.mouseX * host_w / window_w;
-                    int h = event.wheel.mouseY * host_h / window_h;
-                    sprintf(message, "MS%C %d %d", event.wheel.preciseY < 0 ? 'U' : 'D', w,h);
-                    //printf("MS:%s\n", message);
-                    send_message_with_header(socketFD, message, strlen(message));
-                    break;
-                }
-//                case SDL_FINGERMOTION:
-//                    printf("%f %f\n",event.tfinger.dx,event.tfinger.dx);
-//                    break;
-                case SDL_KEYDOWN: case SDL_KEYUP:{
-                    //so text keys genetate an instant keyup but modifiers like shift wait until you actually release the key
-                    //printf("keyp\n");
-                    int kc=event.key.keysym.sym;
-                    int press=event.type==SDL_KEYDOWN;
-                    //ascii control codes are prefixed with 0xff00 X11
-                    switch (kc) {
-                        //printable ascii characters are mapped normally ( note: glibc isprint crashes on special keys)
-                        case ' '...'~': break;
-                        case SDLK_BACKSPACE: case SDLK_TAB: case SDLK_RETURN: case SDLK_ESCAPE:
-                            kc|=0xff00;
-                            break;
-                        case SDLK_LCTRL:kc=XK_Control_L;break;
-                        case SDLK_RCTRL:kc=XK_Control_R;break;
-                        case SDLK_LSHIFT:kc=XK_Shift_L;break;
-                        case SDLK_RSHIFT:kc=XK_Shift_R;break;
-                        case SDLK_LALT:kc=XK_Alt_L;break;
-                        case SDLK_RALT:kc=XK_Alt_R;break;
-                        case SDLK_LGUI:kc=XK_Meta_L;break;
-                        case SDLK_RGUI:kc=XK_Meta_R;break;
-
-                        case SDLK_RIGHT:kc=XK_Right;break;
-                        case SDLK_LEFT:kc=XK_Left;break;
-                        case SDLK_DOWN:kc=XK_Down;break;
-                        case SDLK_UP:kc=XK_Up;break;
-                        case SDLK_DELETE:kc=XK_Delete;break;
-
-
-                        case SDLK_F1...SDLK_F12: kc=kc-SDLK_F1+XK_F1; break;
-
-                        //case SDLK_CAPSLOCK:kc=XK_Caps_Lock;break;
-
-                        default:printf("Unmapped key %d\n",kc);continue;
-                    }
-                    printf("%d\n",kc);
-                    sprintf(message,"K%c %8d",press?'D':'U',kc);
-                    send_message_with_header(socketFD,message,strlen(message));
-                    break;
-                default:
-                    printf("type: %d\n",event.type);
-                }
-            }
-        }
-        uncork_socket(socketFD);
+        if(!running)
+            break;
         int len;
         uint8_t *received = (uint8_t*)get_message_with_header(socketFD, &len);
         send_message_with_header(socketFD,"ACK",3);
@@ -188,4 +246,5 @@ int main(int argc, char *argv[]) {
         SDL_DestroyTexture(text);
         SDL_RenderPresent(renderer);
     }
+    pthread_join(input_thread,NULL);
 }

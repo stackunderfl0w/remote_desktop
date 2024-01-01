@@ -14,6 +14,18 @@
 
 #include <netinet/tcp.h>
 
+#include <poll.h>
+
+int socket_status(int socket_fd) {
+    struct pollfd fds[1];
+    fds[0].fd = socket_fd;
+    fds[0].events = POLLIN;
+
+    // Timeout set to zero for non-blocking check
+    return poll(fds, 1, 0);
+}
+
+
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
