@@ -189,7 +189,8 @@ int main(int argc, char *argv[]) {
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
 
-    struct timespec timestamps[60];
+    #define NUM_TIMESTAMPS 60
+    struct timespec timestamps[NUM_TIMESTAMPS];
     int time_idx=0;
     int running=1;
     int window_w=1280,window_h=720;
@@ -202,49 +203,41 @@ int main(int argc, char *argv[]) {
     pthread_create(&input_thread,NULL,client_input_thread,&args);
 
     uint8_t* current_image=calloc(host_w*host_h*host_c,1);
+    uint8_t* received=NULL;
+    int received_len=0;
+
+    SDL_Texture *text = SDL_CreateTexture(renderer,
+                                          SDL_PIXELFORMAT_ARGB8888,
+                                          SDL_TEXTUREACCESS_STREAMING,
+                                          host_w,
+                                          host_h);
 
     while(running){
-        clock_gettime(CLOCK_MONOTONIC,&timestamps[time_idx%60]);
-        struct timespec cur=timestamps[time_idx%60],p=timestamps[(time_idx+1)%60];
+        clock_gettime(CLOCK_MONOTONIC,&timestamps[time_idx%NUM_TIMESTAMPS]);
+        struct timespec cur=timestamps[time_idx%NUM_TIMESTAMPS],p=timestamps[(time_idx+1)%NUM_TIMESTAMPS];
         double dtime=(double)(cur.tv_sec-p.tv_sec)+(double)(cur.tv_nsec-p.tv_nsec)/1000000000.0;
-        double fps=60/dtime;
+        double fps=(NUM_TIMESTAMPS-1)/dtime;
         if(!time_idx)
             printf("fps:%f\n",fps);
-        time_idx=(time_idx+1)%60;
+        time_idx=(time_idx+1)%NUM_TIMESTAMPS;
         if(!running)
             break;
         int len;
-        uint8_t *received = (uint8_t*)get_message_with_header(socketFD, &len);
+        received = (uint8_t*)get_message_with_header_reuse(socketFD, (char **) &received, &received_len, &len);
+
         send_message_with_header(socketFD,"ACK",3);
         if(!received){
             err(1,"Connection failed");
         }
-        //printf("Frame recieved size:%d\n",len);
-        char* dec= qoi_decode(received,&host_w,&host_h,&host_c);
-        for (int i = 0; i < host_w*host_h*host_c; ++i) {
-            current_image[i]+=dec[i];
-        }
-        SDL_Surface* surface =
-                SDL_CreateRGBSurfaceFrom(
-                        current_image,       // dest_buffer from CopyTo
-                        host_w,        // in pixels
-                        host_h,       // in pixels
-                        host_c*8,        // in bits, so should be dest_depth * 8
-                        host_w*host_c,        // dest_row_span from CopyTo
-                        0x00ff0000,        // RGBA masks, see docs
-                        0x0000ff00,
-                        0x000000ff,
-                        0x00000000
-                );
-        //SDL_Surface * surface = SDL_CreateRGBSurfaceWithFormatFrom(dec,w,h,c*8,w*c,SDL_PIXELFORMAT_BGR24);
-        //SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-        SDL_Texture* text= SDL_CreateTextureFromSurface(renderer,surface);
-        SDL_FreeSurface(surface);
-        free(received);
-        free(dec);
+
+        qoi_decode_diff(current_image,received,&host_w,&host_h,&host_c);
+
+        SDL_UpdateTexture(text, NULL, current_image, host_w * host_c);
+
         SDL_RenderCopy(renderer,text,NULL,NULL);
-        SDL_DestroyTexture(text);
         SDL_RenderPresent(renderer);
     }
+    free(received);
+    SDL_DestroyTexture(text);
     pthread_join(input_thread,NULL);
 }

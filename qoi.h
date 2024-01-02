@@ -230,3 +230,56 @@ void* qoi_decode(uint8_t* data, int* width, int* height, int* channels){
     //free(final_bitmap);
     return final_bitmap;
 }
+
+void* qoi_decode_diff(uint8_t* final_bitmap, uint8_t* data, int* width, int* height, int* channels){
+    struct qoi_header* qh= (struct qoi_header *) data;
+    *width= __bswap_constant_32(qh->width);
+    *height= __bswap_constant_32(qh->height);
+    *channels=qh->channels;
+
+    int size=(*width) * (*height);
+
+    uint8_t * img_p=final_bitmap;
+
+    uint8_t* d=data+sizeof (struct qoi_header);
+
+    pixel recent[64]={0};
+    pixel px={{{0, 0, 0, 255}}};
+    int run=0;
+    for (int i=0;i<size;i++) {
+        if(run){
+            run--;
+        }
+        else {
+            uint8_t chunk = *d++;
+            if (chunk == QOI_OP_RGB) {
+                px = (pixel) {{{d[0], d[1], d[2], px.a}}};
+                d += 3;
+            } else if (chunk == QOI_OP_RGBA) {
+                px = *(pixel *) d;
+                d += 4;
+            } else if (chunk >> 6 == QOI_OP_INDEX) {
+                px = recent[chunk];
+            } else if (chunk >> 6 == QOI_OP_DIFF) {
+                px.r += ((chunk >> 4) & 0x3) - 2;
+                px.g += ((chunk >> 2) & 0x3) - 2;
+                px.b += (chunk & 0x3) - 2;
+            } else if (chunk >> 6 == QOI_OP_LUMA) {
+                uint8_t dg = (chunk & 0x3f) - 32;
+                uint8_t b2 = *d++;
+                px.r += ((b2 >> 4) & 0xf) - 8 + dg;
+                px.g += dg;
+                px.b += (b2 & 0xf) - 8 + dg;
+            } else if (chunk >> 6 == QOI_OP_RUN) {
+                run=chunk&0x3f;
+            }
+            recent[qoi_hash(px)] = px;
+        }
+        *img_p++ += px.r;
+        *img_p++ += px.g;
+        *img_p++ += px.b;
+        if (qh->channels == 4)
+            *img_p++ += px.a;
+    }
+    return final_bitmap;
+}

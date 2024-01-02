@@ -3,10 +3,12 @@
 #include <X11/Xutil.h>
 #include <X11/extensions/XTest.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/Xrandr.h>
+
 #include <stdlib.h>
-#include <sys/ioctl.h>
 #include <sys/shm.h>
 #include <pthread.h>
+#include <sys/time.h>
 
 #include "net-wrapper.h"
 #include "qoi.h"
@@ -54,7 +56,7 @@ int handle_input_event(Display *disp, int connectionSocket, ssize_t *ack_count) 
                 }
                 //printf("%d %d %d\n",mb,x,y);
                 //move mouse
-                //XTestFakeMotionEvent(disp,0,x,y,CurrentTime);
+                XTestFakeMotionEvent(disp,0,x,y,CurrentTime);
                 //click
                 if(mb)
                     XTestFakeButtonEvent(disp, mb, click, CurrentTime);
@@ -97,8 +99,20 @@ void* input_thread_main(server_input_thread_args* args){
     return NULL;
 }
 
+//replace clock() which counts program execution time and freezes during sleep/usleep
+clock_t clock_mono(){
+    struct timeval current_time;
+    gettimeofday(&current_time, NULL);
+    return current_time.tv_sec*(int)1e6+current_time.tv_usec;
+}
+
 
 int main(int argc, char* argv[]) {
+    Display* display = XOpenDisplay(NULL);
+    int screen = DefaultScreen(display);
+    Window root = RootWindow(display, screen);
+
+
     int portNumber=6001;
     if(argc>1){
         portNumber= (int)strtol(argv[1],NULL,10);
@@ -153,6 +167,11 @@ int main(int argc, char* argv[]) {
         Window root = DefaultRootWindow(disp);
         if(!root)
             err(1,"Error: Cannot open default x11 root window\n");
+        XRRScreenConfiguration *config = XRRGetScreenInfo(display, root);
+        short rate = XRRConfigCurrentRate(config);
+        XRRFreeScreenConfigInfo(config);
+
+        printf("%d\n",rate);
 
         int xshm_available=XShmQueryExtension(disp);
         if(!xshm_available)
@@ -183,7 +202,29 @@ int main(int argc, char* argv[]) {
         pthread_t input_thread;
         pthread_create(&input_thread, NULL, (void *(*)(void *)) input_thread_main, &inputThreadArgs);
 
+        long frametime=CLOCKS_PER_SEC/rate;
+        long halfframe=frametime/2;
+        clock_t next_start = clock_mono();
+
+
         while(running) {
+            //printf("NS:%ld,CL:%ld\n",next_start,clock_mono());
+            clock_t current_time=clock_mono();
+            //running early, wait a bit to process the next frame
+            if(current_time<next_start-halfframe){
+                next_start+=frametime;
+                //printf("%ld\n",((next_start-halfframe)-current_time));
+                usleep((next_start-halfframe)-current_time);
+            }
+            //running late, don't wait up
+            else if(current_time>next_start+halfframe){
+                while(current_time>next_start+halfframe)
+                    next_start+=frametime;
+            }
+            //running fine, just set the next frame time
+            else{
+                next_start+=frametime;
+            }
 
             //wait until we get confirmation the client received frames
             while(running && max_frame_presend==0){

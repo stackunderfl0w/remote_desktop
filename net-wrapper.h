@@ -93,6 +93,26 @@ static inline char* get_message_with_header(int listenSocket, int* len){
     }
     return ret_buf;
 }
+
+static inline char* get_message_with_header_reuse(int listenSocket,char** buf,int* buf_len, int* len){
+    //get 8 byte length header
+    char tmp[9]={0};
+    if(get_message(listenSocket,tmp,8)==-1){
+        return NULL;//timeout
+    }
+
+    *len=atoi(tmp);
+    //get actual message of specified length
+    if(*buf_len<*len){
+        *buf=realloc(*buf,*len);
+        *buf_len=*len;
+    }
+    if(get_message(listenSocket,*buf,*len)==-1){
+        return NULL;
+    }
+    return *buf;
+}
+
 ssize_t send_message(int socketFD, char* buffer, int len){
     ssize_t charsWritten = 0;
     while (charsWritten<len){
