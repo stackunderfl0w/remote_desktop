@@ -34,7 +34,7 @@ static inline __attribute__((always_inline)) int qoi_hash(pixel p){
 
 void* qoi_encode(uint8_t* d, int width, int height, int channels, int* size){
     uint8_t* out=malloc(width*height*channels);
-    *((struct qoi_header*)out)=(struct qoi_header){{"qoif"}, __bswap_constant_32(width), __bswap_constant_32(height),channels,0};
+    *((struct qoi_header*)out)=(struct qoi_header){{"qoif"}, htonl(width), htonl(height),channels,0};
     uint8_t* o_idx=out+ sizeof(struct qoi_header);
 
     pixel recent[64]={0};
@@ -104,7 +104,7 @@ void* qoi_encode(uint8_t* d, int width, int height, int channels, int* size){
 }
 ///todo investigate loop unrolling
 void* qoi_encode_diff(uint8_t* out, uint8_t* d,uint8_t* o, int width, int height, int channels, int* size){
-    *((struct qoi_header*)out)=(struct qoi_header){{"qoif"}, __bswap_constant_32(width), __bswap_constant_32(height),channels,0};
+    *((struct qoi_header*)out)=(struct qoi_header){{"qoif"}, htonl(width), htonl(height),channels,0};
     uint8_t* o_idx=out+ sizeof(struct qoi_header);
 
     pixel recent[64]={0};
@@ -175,8 +175,8 @@ void* qoi_encode_diff(uint8_t* out, uint8_t* d,uint8_t* o, int width, int height
 
 void* qoi_decode(uint8_t* data, int* width, int* height, int* channels){
     struct qoi_header* qh= (struct qoi_header *) data;
-    *width= __bswap_constant_32(qh->width);
-    *height= __bswap_constant_32(qh->height);
+    *width= ntohl(qh->width);
+    *height= ntohl(qh->height);
     *channels=qh->channels;
 
     int size=(*width) * (*height);
@@ -226,15 +226,13 @@ void* qoi_decode(uint8_t* data, int* width, int* height, int* channels){
     }
 
     //stbi_write_png("test.png", qh->width, qh->height, qh->channels, final_bitmap, qh->width*qh->channels);
-    //printf("%d\n",final_bitmap[0]);
-    //free(final_bitmap);
     return final_bitmap;
 }
 
 void* qoi_decode_diff(uint8_t* final_bitmap, uint8_t* data, int* width, int* height, int* channels){
     struct qoi_header* qh= (struct qoi_header *) data;
-    *width= __bswap_constant_32(qh->width);
-    *height= __bswap_constant_32(qh->height);
+    *width= ntohl(qh->width);
+    *height= ntohl(qh->height);
     *channels=qh->channels;
 
     int size=(*width) * (*height);

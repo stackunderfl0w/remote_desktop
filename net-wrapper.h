@@ -127,7 +127,7 @@ ssize_t send_message(int socketFD, char* buffer, int len){
 }
 ssize_t send_message_with_header(int socketFD, char* buffer, size_t len){
     char tmp[9];
-    sprintf(tmp,"%-8d",len);
+    sprintf(tmp,"%-8ld",len);
     //send header
 //    if(send_message(socketFD, tmp, 8)==-1){
 //        return -1;

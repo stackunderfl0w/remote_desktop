@@ -196,7 +196,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < wa.width*wa.height; ++i) {
             ((uint32_t*)prev_img)[i]=0xff000000;
         }
-        ssize_t max_frame_presend=5;
+        ssize_t max_frame_presend=3;
         int running=1;
         server_input_thread_args inputThreadArgs={disp, connectionSocket, &max_frame_presend, &running};
         pthread_t input_thread;

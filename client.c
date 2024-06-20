@@ -68,6 +68,7 @@ void* client_input_thread(void* arg){
 //                case SDL_FINGERMOTION:
 //                    printf("%f %f\n",event.tfinger.dx,event.tfinger.dx);
 //                    break;
+                case SDL_TEXTINPUT:break;
                 case SDL_KEYDOWN:
                 case SDL_KEYUP: {
                     //so text keys genetate an instant keyup but modifiers like shift wait until you actually release the key
@@ -149,6 +150,7 @@ void* client_input_thread(void* arg){
         uncork_socket(socketFD);
         usleep(1000);
     }
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
@@ -230,8 +232,18 @@ int main(int argc, char *argv[]) {
             err(1,"Connection failed");
         }
 
+        struct qoi_header*qh=(struct qoi_header*)received;
+        //resolution change, or setup
+        if(host_w!=ntohl(qh->width)||host_h!=ntohl(qh->height)||host_c!=qh->channels){
+            free(current_image);
+            current_image= calloc(ntohl(qh->width)*ntohl(qh->height)*qh->channels,1);
+            SDL_DestroyTexture(text);
+            text = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,ntohl(qh->width),ntohl(qh->height));
+        }
         qoi_decode_diff(current_image,received,&host_w,&host_h,&host_c);
+        //void* dat=qoi_decode(received,&host_w,&host_h,&host_c);
 
+        //SDL_UpdateTexture(text, NULL, dat, host_w * host_c);
         SDL_UpdateTexture(text, NULL, current_image, host_w * host_c);
 
         SDL_RenderCopy(renderer,text,NULL,NULL);
